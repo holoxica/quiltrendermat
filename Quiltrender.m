@@ -3,7 +3,7 @@
 clear; 
 close all; 
 
-% initialise python stuff
+%% initialise python stuff
 pe = pyenv;
 if pe.Status == 'NotLoaded'
     pyenv("ExecutionMode","OutOfProcess","Version","3.8");
@@ -13,6 +13,7 @@ pyenv
 py.holoserverpy = py.importlib.reload(py.importlib.import_module('holoserverpy'));
 py.holoserverpy.ws_init(); 
 
+%% Looking Glass Display
 LKG_display = "portrait"; % can be '15.6' or '32', TODO: get this from driver!
 
 switch LKG_display      % Params for the various displays
@@ -53,41 +54,33 @@ cmd = strcat("python3 ", pyscript, " ", fn);
 L = 1000*membrane(1,100);
 %L = L - min(L(:));
 s = surface(L,'EdgeColor','none');
-%surf(peaks)
+s = surf(peaks);
+colormap("hsv");
 view(3) % default view is 2D, so make it 3D
 
 f = gcf;
 ax = gca;
-f.MenuBar = "none";
-f.ToolBar = "none";
-%set(f,'HitTest','off')
-% f.WindowButtonUpFcn = 'disp(''figure callback'')';
-%f.WindowButtonUpFcn = @(src,evt)showAzEl(f,evt);
-f.Position(3:4) = [Q_imresX/2 Q_imresY/2];
+ax.Interactions = zoomInteraction;
+tb = axtoolbar(ax,"default");
+tb.SelectionChangedFcn = @(src,evt)toolbarSelection(src,evt);
+%f.MenuBar = "none";
+%f.ToolBar = "auto";
 
-% ax.ButtonDownFcn = 'disp(''axis callback'')';
+%f.WindowButtonUpFcn = "disp('figure callback')";
+f.WindowScrollWheelFcn = "disp('Scroll callback')";
+f.Position(3:4) = [Q_imresX Q_imresY]*0.71; % set resolution of viewport
 
 h = rotate3d;
 h.ActionPostCallback = @(src,evt)renderViews(f,evt);    % Main callback
 
-% % az = -30; %%
-% % el = 16;
-% % view(az,el)
-
-axis off
-%hold on;
+%axis off
 axis manual;    % don't autoscale axes, freeze to current values
 
 %% Cammera parameters
 ax.Projection = "perspective";
 ax.CameraPositionMode = "manual";
-% ax.CameraPosition = [500 -200 0];
 ax.CameraTargetMode = "manual";
-%ax.CameraTarget = [0 0 0];
-% ax.CameraUpVector = [0 0 1];
 ax.CameraViewAngleMode = "manual";
-% ax.CameraViewAngle = 36.7;
-
 
 % Lighting 
 l1 = light;
@@ -105,8 +98,8 @@ l3.Style = 'local';
 l3.Color = [0 0.8 0.8];
 
 % Colours & map
-s.FaceColor = [0.9 0.2 0.2];
-f.Color = 'black'; % background colour
+%s.FaceColor = [0.9 0.2 0.2];
+%f.Color = 'black'; % background colour
 
 % Specular reflections
 s.FaceLighting = 'gouraud';
@@ -143,53 +136,79 @@ shared.cpos = cpos;
 shared.fn = fn;
 shared.ext = ext; 
 shared.cmd = cmd;
+shared.s = s;
 shared.diagnostic = false;
 
+fig2 = figure;
+fig2.MenuBar = "none";
+%fig2.ToolBar = "none";
+fig2.Color = f.Color;
+fig2.Colormap = f.Colormap;
+fig2.Position(1:2) = f.Position(1:2) + [0 -Q_imresY];    
+fig2.Position(3:4) = [Q_imresX/2 Q_imresY/2]; % set resolution of renderer
+%rotate3d;
+%axis off;
+axis manual;
+hold off;
+shared.fig2 = fig2;
+
+figure(f);
 
 h.Enable = 'on';
 renderViews("",""); % do a first render
-while isvalid(f)
+done = false;
+while not(done)
+    done = not(isvalid(f)); 
     pause(0.02);
 end
-
 imwrite(quiltimage,shared.fn,shared.ext); % write out the quilt for testing
-
+disp('Finished writing quilt')
+close(fig2);
 
 %% Render multiple view points - callback when a mouse rotate is done
 function renderViews(src,evt)
     global shared;
     global quiltimage;  
     
-    ax = gca;
     f = gcf;
+    ax = gca(f);
     h = rotate3d(f);
-    campos = ax.CameraPosition; 
-    setAllowAxesRotate(h,ax,false); % disable rotation during renders
-    % f.Visible = "off";
+    %campos = ax.CameraPosition; 
+    %setAllowAxesRotate(h,ax,false); % disable rotation during renders
+    clf(shared.fig2); 
+    copyobj(ax,shared.fig2);
+    figure(shared.fig2);
 
     dAz = shared.Fov/shared.Q_size; 
     camorbit(-shared.Fov*0.5-dAz, 0, 'camera'); % start at the leftmost view 
-    
     tic
     for j = 1:shared.Q_size
+        %figure(shared.fig2);
+        shared.fig2.Visible = "on";
         camorbit(dAz, 0, 'camera'); % advance cam by one position
+        %shared.fig2.Visible = "off";
+        im = frame2im(getframe(shared.fig2));
         [r, c] = find(shared.qq==j);
         row = shared.rpos(r);
         col = shared.cpos(c);
-        im = frame2im(getframe(f));
         if shared.diagnostic
-            im = insertText(im, [c*50 r*50], num2str(j),"FontSize",50); 
+            im = insertText(im, [50*floor(j/20+1) 40*mod(j,15)], num2str(j),"FontSize",30, "TextColor","yellow"); 
         end
         imsz = size(im);
         quiltimage(row:row+imsz(1)-1, col:col+imsz(2)-1, :) = im;
     end
     toc
-% %    view(az,el);
-    ax.CameraPosition = campos; % restore camera position 
+    shared.fig2.Visible = "off";
     np_quilt = py.numpy.array(quiltimage); 
     py.holoserverpy.mat_quilt(np_quilt,shared.Q_cols,shared.Q_rows,shared.Q_aspect); 
-    % f.Visible = "on";
     setAllowAxesRotate(h,ax,true); % enable rotating
     % imwrite(quiltimage,shared.fn,shared.ext);     % write to disk
     % status = system(shared.cmd)                   % call python via cmd line
+end
+
+
+function toolbarSelection(src,evt,~)
+    disp(src);
+    disp(evt);
+
 end
