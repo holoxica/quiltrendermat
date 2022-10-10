@@ -3,6 +3,13 @@
 clear; 
 close all; 
 
+% initialise python stuff
+pe = pyenv;
+if pe.Status == 'NotLoaded'
+    pyenv("ExecutionMode","OutOfProcess","Version","3.8");
+end
+py.list; % Call a Python function to load interpreter
+pyenv
 py.holoserverpy = py.importlib.reload(py.importlib.import_module('holoserverpy'));
 py.holoserverpy.ws_init(); 
 
@@ -39,15 +46,15 @@ ext = "png";
 quiltstr = strcat('_qs',num2str(Q_cols),'x',num2str(Q_rows),"a",num2str(Q_aspect,'%1.2f'));
 rgbstr = "_rgb";
 fn = strcat(fname, quiltstr, ".", ext); % image file name
-fn_raw = strcat(fname, rgbstr, quiltstr, ".raw"); % raw file name for RGB24 data
-pyscript = "/Users/javid/Documents/holoxica/projects/holoserverpy/holoserverpy.py";
+pyscript = "holoserverpy.py";
 cmd = strcat("python3 ", pyscript, " ", fn);
 
-% draw the logo
-L = 2000*membrane(1,100);
-L = L - min(L(:));
-s = surface(L);
-s.EdgeColor = 'none';
+%% draw the logo
+L = 1000*membrane(1,100);
+%L = L - min(L(:));
+s = surface(L,'EdgeColor','none');
+%surf(peaks)
+view(3) % default view is 2D, so make it 3D
 
 f = gcf;
 ax = gca;
@@ -58,33 +65,29 @@ f.ToolBar = "none";
 %f.WindowButtonUpFcn = @(src,evt)showAzEl(f,evt);
 f.Position(3:4) = [Q_imresX/2 Q_imresY/2];
 
-ax.ButtonDownFcn = 'disp(''axis callback'')';
-
-%ax.ButtonDownFcn = @(f,ax)showAzEl(f,ax); 
+% ax.ButtonDownFcn = 'disp(''axis callback'')';
 
 h = rotate3d;
-h.ActionPostCallback = @(src,evt)renderViews(f,evt);
-az = -30;
-el = 16;
-view(az,el)
+h.ActionPostCallback = @(src,evt)renderViews(f,evt);    % Main callback
 
-%view(3)
+% % az = -30; %%
+% % el = 16;
+% % view(az,el)
 
-% ax.XLim = [-100 201];
-% ax.YLim = [-100 201];
-% ax.ZLim = [0 max(L(:))];
+axis off
+%hold on;
+axis manual;    % don't autoscale axes, freeze to current values
 
-% ax.CameraPosition = [-145.5 -229.7 283.6];
-% ax.CameraTarget = [77.4 60.2 63.9];
-
-% ax.CameraPosition = [-245.5 -329.7 283.6];
-% ax.CameraTarget = [0 0 0];
+%% Cammera parameters
+ax.Projection = "perspective";
+ax.CameraPositionMode = "manual";
+% ax.CameraPosition = [500 -200 0];
+ax.CameraTargetMode = "manual";
+%ax.CameraTarget = [0 0 0];
 % ax.CameraUpVector = [0 0 1];
+ax.CameraViewAngleMode = "manual";
 % ax.CameraViewAngle = 36.7;
-%ax.CameraViewAngleMode = "manual";
 
-%ax.Position = [0 0 1 1];
-%ax.DataAspectRatio = [1 1 .9];
 
 % Lighting 
 l1 = light;
@@ -114,16 +117,11 @@ s.SpecularStrength = 1;
 s.SpecularColorReflectance = 1;
 s.SpecularExponent = 7;
 
-axis off
-%hold on;
-%axis manual; 
-
 M(Q_size) = struct('cdata',[],'colormap',[]);
-az_offset = linspace(-Fov*0.5,Fov*0.5,Q_size);
-
+az_offset = fliplr(linspace(-Fov*0.5,Fov*0.5,Q_size));
 
 % work out correct indexing of the quilt with bottom-left=1 and
-% top-right=45
+% top-right=total nr. views
 q = flipud(reshape(1:Q_size,Q_cols,Q_rows)')';
 qq = q';    % sequence of tiles in the quilt, used for indexing
 qidx = q(:)';
@@ -135,6 +133,7 @@ shared.Q_cols = Q_cols;
 shared.Q_rows = Q_rows;
 shared.Q_aspect = Q_aspect;
 shared.Q_size = Q_size;
+shared.Fov = Fov; 
 shared.Q_imresX = Q_imresX;
 shared.Q_imresY = Q_imresY;
 shared.az_offset = az_offset;
@@ -164,35 +163,33 @@ function renderViews(src,evt)
     ax = gca;
     f = gcf;
     h = rotate3d(f);
+    campos = ax.CameraPosition; 
     setAllowAxesRotate(h,ax,false); % disable rotation during renders
     % f.Visible = "off";
-    disp(ax.View);
-    az = ax.View(1);
-    el = ax.View(2);
 
-    az_positions = az + shared.az_offset;
+    dAz = shared.Fov/shared.Q_size; 
+    camorbit(-shared.Fov*0.5-dAz, 0, 'camera'); % start at the leftmost view 
+    
     tic
     for j = 1:shared.Q_size
-        view(az_positions(j),el);
+        camorbit(dAz, 0, 'camera'); % advance cam by one position
         [r, c] = find(shared.qq==j);
         row = shared.rpos(r);
         col = shared.cpos(c);
-%         M(j) = getframe(f);
-%         im = frame2im(M(j));
         im = frame2im(getframe(f));
         if shared.diagnostic
             im = insertText(im, [c*50 r*50], num2str(j),"FontSize",50); 
         end
         imsz = size(im);
-        % quiltimage(row:row+shared.Q_imresY-1, col:col+shared.Q_imresX-1,:) ... % = im; 
         quiltimage(row:row+imsz(1)-1, col:col+imsz(2)-1, :) = im;
     end
     toc
-    view(az,el);
+% %    view(az,el);
+    ax.CameraPosition = campos; % restore camera position 
     np_quilt = py.numpy.array(quiltimage); 
     py.holoserverpy.mat_quilt(np_quilt,shared.Q_cols,shared.Q_rows,shared.Q_aspect); 
     % f.Visible = "on";
     setAllowAxesRotate(h,ax,true); % enable rotating
-    % imwrite(quiltimage,shared.fn,shared.ext);
-    % status = system(shared.cmd)
+    % imwrite(quiltimage,shared.fn,shared.ext);     % write to disk
+    % status = system(shared.cmd)                   % call python via cmd line
 end
