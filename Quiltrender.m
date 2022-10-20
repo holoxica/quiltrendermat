@@ -9,87 +9,47 @@ clear;
 close all; 
 
 %% initialise display, driver and python utility
+pyscript = "holoserverpy.py";
 defaultDisplay = "portrait"; 
 
 % Check the python interpreter and utility are present and working. 
 % Note that the utility will require external libraries to be installed
 % from Matlab via:
 % >> system("pip3 install websocket-client cbor2 opencv-python")
-utilityPresent = isfile("holoserverpy.py");
+utilityPresent = isfile(pyscript);
 pe = pyenv;
 if not(utilityPresent)
     warning("Python holoserver utility not found, please contact Holoxica for this.")
-elseif pe.Status == 'NotLoaded'
+elseif strcmp(pe.Status, 'NotLoaded')
     pyenv("ExecutionMode","OutOfProcess","Version","3.9");    
     py.list; % Call a Python function to load interpreter
     py.holoserverpy = py.importlib.reload(py.importlib.import_module('holoserverpy'));
-    utilityPresent = true;
-else
-    utilityPresent = true;
 end
 
 global Quilt;
 Quilt = initialise3Ddisplay(utilityPresent,defaultDisplay); 
-Quilt.image = zeros(Quilt.sizepx,Quilt.sizepx,3,"uint8"); 
-
-[f, ax, surfnames, fname] = surfshow(); % generate a 3D surface
+[f, surfnames, fname] = surfshow(); % generate a 3D surface
+Quilt.renderFig = renderFigGen(f, [Quilt.imresX Quilt.imresY]);
+Quilt.diagnostic = false;
 
 % File name format and python command line
 ext = "png";
 quiltstr = strcat('_qs',num2str(Quilt.cols),'x',num2str(Quilt.rows), ...
                   "a",num2str(Quilt.aspect,'%1.2f'));
-fn = strcat(fname, quiltstr, ".", ext); % image file name
-pyscript = "holoserverpy.py";
+fn = strcat("Quilt", quiltstr, ".", ext); % image file name
 cmd = strcat("python3 ", pyscript, " ", fn);
 
-ax.Interactions = zoomInteraction;
-tb = axtoolbar(ax,"default");
-tb.SelectionChangedFcn = @(src,evt)testCallback(src,evt);
-%f.MenuBar = "none";
-%f.ToolBar = "auto";
-
-%f.WindowButtonUpFcn = "disp('figure callback')";
-f.WindowScrollWheelFcn = "disp('Scroll callback')";
-f.WindowKeyPressFcn = @(src,evt)testCallback(src,evt); %"disp('Key realease callback')";
-f.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.71; % set resolution of viewport
-
-h = rotate3d;
-h.ActionPostCallback = @(src,evt)renderViews(f,evt);    % Main callback
-
-%M(Quilt.size) = struct('cdata',[],'colormap',[]);
-
-% work out correct indexing of the quilt with bottom-left=1 and
-% top-right=total nr. views
-q = flipud(reshape(1:Quilt.size,Quilt.cols,Quilt.rows)')';
-qq = q';    % sequence of tiles in the quilt, used for indexing
-qidx = q(:)';
-rpos=1:Quilt.imresY:Quilt.sizepx;  % indexing into larger quilt image
-cpos=1:Quilt.imresX:Quilt.sizepx;
-
 global shared;
-shared.qq = qq;
-shared.rpos = rpos;
-shared.cpos = cpos;
 shared.fn = fn;
 shared.ext = ext; 
 shared.cmd = cmd;
-shared.diagnostic = false;
 shared.keyPressed = ""; 
 
-% A second figure is used for the actual rendering. It is normally invisible
-fig2 = figure;
-fig2.MenuBar = "none";
-%fig2.ToolBar = "none";
-fig2.Color = f.Color;
-fig2.Colormap = f.Colormap;
-fig2.Position(1:2) = f.Position(1:2) + [0 -Quilt.imresY];    
-fig2.Position(3:4) = [Quilt.imresX/2 Quilt.imresY/2]; % set resolution of renderer
-axis manual;
-hold off;
-shared.fig2 = fig2;
 
 %% Main game loop
 figure(f);
+ax = gca;
+h = rotate3d(f); % handlt to rotation mode on axes
 h.Enable = 'on';
 animation = false;
 renderViews("",""); % do a first render
@@ -115,8 +75,6 @@ while not(done)
                 idx = mod(idx,length(surfnames))+1;     % next image
                 fname = surfnames(idx);
                 [f, ax] = surfshow(fname);
-                fig2.Color = f.Color;
-                fig2.Colormap = f.Colormap;
         end
         fprintf("Key: %s \n",shared.keyPressed);
         shared.keyPressed = ""; 
@@ -129,47 +87,62 @@ while not(done)
         ax.View = ax.View + [2 0]; 
     end
 end
+
+% write the final quilt out
+fn = strcat(fname, quiltstr, ".", ext); % image file name
 imwrite(Quilt.image,shared.fn,shared.ext); % write out the quilt for testing
 fprintf('Quilt written to: %s \n',fn);
-close(fig2);
+close(Quilt.renderFig);
+
 
 %% Render multiple view points - callback when a mouse rotate is done
 function renderViews(src,evt)
+% Multiview rendering to make a quilt, starting with the leftmost view and
+% orbit the camera across the scene, taking snapshots of the renderfig as
+% we go. The snapshots are added to the quilt image matrix
     global Quilt; 
-    global shared;
+    % global shared;
     
+    if Quilt.busyrendering == true % ensure only one render job at a time 
+        return
+    end
+    Quilt.busyrendering = true;
     f = gcf;
     ax = gca(f);
     h = rotate3d(f);
     setAllowAxesRotate(h,ax,false); % disable rotation during renders
-    clf(shared.fig2); 
-    copyobj(ax,shared.fig2);
-    figure(shared.fig2);
+    clf(Quilt.renderFig); 
+    Quilt.renderFig.Color = f.Color;
+    Quilt.renderFig.Colormap = f.Colormap;
+    copyobj(ax,Quilt.renderFig);
+    figure(Quilt.renderFig);
 
     dAz = Quilt.viewCone/Quilt.size; 
     camorbit(-Quilt.viewCone*0.5-dAz, 0, 'camera'); % start at the leftmost view 
     tic
     for j = 1:Quilt.size
-        %figure(shared.fig2);
-        shared.fig2.Visible = "on";
+        %figure(shared.renderFig);
+        Quilt.renderFig.Visible = "on";
         camorbit(dAz, 0, 'camera'); % advance cam by one position
-        %shared.fig2.Visible = "off";
-        im = frame2im(getframe(shared.fig2));
-        [r, c] = find(shared.qq==j);
-        row = shared.rpos(r);
-        col = shared.cpos(c);
-        if shared.diagnostic
-            im = insertText(im, [50*floor(j/20+1) 40*mod(j,15)], num2str(j),"FontSize",30, "TextColor","yellow"); 
+        %shared.renderFig.Visible = "off";
+        im = frame2im(getframe(Quilt.renderFig));
+        [r, c] = find(Quilt.qq==j);
+        row = Quilt.rpos(r);
+        col = Quilt.cpos(c);
+        if Quilt.diagnostic
+            im = insertText(im, [50*floor(j/20+1) 40*mod(j,15)], ... 
+                        num2str(j), "FontSize",30, "TextColor","yellow"); 
         end
         imsz = size(im);
         Quilt.image(row:row+imsz(1)-1, col:col+imsz(2)-1, :) = im;
     end
     toc
-    shared.fig2.Visible = "off";
+    Quilt.renderFig.Visible = "off";
     if Quilt.displayPresent
         np_quilt = py.numpy.array(Quilt.image); 
         py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
     end
+    Quilt.busyrendering = false; 
     %h.Enable = 'on';
     setAllowAxesRotate(h,ax,true); % enable rotating
     % imwrite(Quilt.image,shared.fn,shared.ext);     % write to disk
@@ -177,7 +150,9 @@ function renderViews(src,evt)
 end
 
 
-function testCallback(src,evt,~)
+%% Callbacks
+
+function keypressedCallback(src,evt,~)
     %disp(src);
     %disp(evt);
     global shared;    
@@ -185,14 +160,19 @@ function testCallback(src,evt,~)
 end
 
 
-%% Initialise the Looking Glass 3D display using the python utility
+function scrollCallback(src,evt)
+    global shared;
+    shared.keyPressed = "rightarrow"; % move on to next surface
+end
+
+
+%%
 function Quilt = initialise3Ddisplay(utilityPresent,defaultDisplay)
 % Initialise the 3D display via the python utility that returns info
 % from the HoloPlay driver. The info contains all of the parameters related
 % to the quilt and the display itself. If this display is not connected
 % then a default set of parameters is used.
 
-    % global Quilt;
     Quilt.displayPresent = false;
     status = {false}; 
     LKG_display = defaultDisplay; % can be '15.6' or '32', used for default if no display connected, otherwise get info from driver
@@ -253,12 +233,29 @@ function Quilt = initialise3Ddisplay(utilityPresent,defaultDisplay)
     Quilt.imresX = floor(Quilt.sizepx / Quilt.cols); 
     Quilt.imresY = floor(Quilt.sizepx / Quilt.rows); 
 
+    % work out correct indexing of the quilt with bottom-left=1 and
+    % top-right=total nr. views
+    q = flipud(reshape(1:Quilt.size,Quilt.cols,Quilt.rows)')';
+    qq = q';    % sequence of tiles in the quilt, used for indexing
+    qidx = q(:)';
+    rpos=1:Quilt.imresY:Quilt.sizepx;  % indexing into larger quilt image
+    cpos=1:Quilt.imresX:Quilt.sizepx;
+    Quilt.qq = qq;
+    Quilt.rpos = rpos;
+    Quilt.cpos = cpos;
+
+    % Build the quilt image
+    Quilt.image = zeros(Quilt.sizepx,Quilt.sizepx,3,"uint8");
+
+    Quilt.busyrendering = false;
+
+    Quilt.diagnostic = false; % diagnostic to save a quilt as we go
+
 end
 
 
-%% Define different kinds of images to show
-
-function [f, ax, surfnames, name] = surfshow(varargin)
+%% Define different kinds of 3D images to show
+function [f, surfnames, name] = surfshow(varargin)
     
     surfnames = ["Matlablogo", "Peaks", "Worldmap"];
     if nargin == 0
@@ -330,7 +327,7 @@ function [f, ax, surfnames, name] = surfshow(varargin)
             
             light('Position',[-1 0 1])     % add a light
             axis square off                % set axis to square and remove axis
-            f.Color = "white"
+            f.Color = "white";
             colormap('default'); 
 
     end
@@ -345,5 +342,53 @@ function [f, ax, surfnames, name] = surfshow(varargin)
     ax.CameraPositionMode = "manual";
     ax.CameraTargetMode = "manual";
     ax.CameraViewAngleMode = "manual";
+
+end
+
+
+%% Take a figure and show it in 3D
+function [renderFig] = renderFigGen(f, imres)
+% Prepare the main figure for 3D visualisation and create an auxillary
+% figure for the actual multi-view rendering
+
+    imresX = imres(1);
+    imresY = imres(2);
+
+    % Set up the main figure for 3D manipulation and visualisation
+    figure(f);
+    ax = gca;
+
+    % Cammera parameters
+    ax.Projection = "perspective";
+    ax.CameraPositionMode = "manual";
+    ax.CameraTargetMode = "manual";
+    ax.CameraViewAngleMode = "manual";
+
+    ax.Interactions = zoomInteraction;
+    tb = axtoolbar(ax,"default");
+    tb.SelectionChangedFcn = @(src,evt)testCallback(src,evt);
+    f.MenuBar = "none";
+    %f.ToolBar = "auto";
+    
+    %f.WindowButtonUpFcn = "disp('figure callback')";
+    f.WindowScrollWheelFcn = @(src,evt)scrollCallback(src,evt); %"disp('Scroll callback')";
+    f.WindowKeyPressFcn = @(src,evt)keypressedCallback(src,evt); %"disp('Key realease callback')";
+    %f.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.71; % set resolution of viewport
+    
+    h = rotate3d;
+    h.ActionPostCallback = @(src,evt)renderViews(f,evt); % Callback for renderer
+
+    % A second figure is used for the actual rendering. It is normally invisible
+    renderFig = figure;
+    renderFig.MenuBar = "none";
+    %renderFig.ToolBar = "none";
+    renderFig.Color = f.Color;
+    renderFig.Colormap = f.Colormap;
+    renderFig.Position(1:2) = f.Position(1:2) + [0 -imresY];    
+    renderFig.Position(3:4) = [imresX/2 imresY/2]; % set resolution of renderer
+    axis manual;
+    hold off;
+
+    figure(f); % back to the main fig
 
 end
