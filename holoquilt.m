@@ -9,13 +9,13 @@
 classdef holoquilt
 
     properties
-        displayPresent = false;
+        %displayPresent = false;
         utilityPresent; % = isfile("holoserverpy.py");
         %status = { false };
         LKG_display;
-        quilt;
+        %quilt;
+        quiltimage;
         defaultDisplay = "portrait";
-        busyrendering = false;  % can't interrupt a quilt being built
         diagnostic = false;     % show individual views
         figname; 
 
@@ -27,7 +27,7 @@ classdef holoquilt
         pyscript = "holoserverpy.py";
         fig
         ax
-        renderFig
+        h
     end
 
     properties (Dependent)
@@ -39,76 +39,46 @@ classdef holoquilt
         
         % constructor
         function obj = holoquilt(varargin)
-            if isempty(obj.quilt)
-                obj = init3Ddisplay(obj);
+            if isempty(holoquilt.setgetQuilt()) % first run
+                [obj, Quilt] = init3Ddisplay(obj);
+                % obj.quilt = Quilt; % make this static/persistent
+                holoquilt.setgetQuilt(Quilt); % make the Quilt static for sharing
             end
+            Quilt = holoquilt.setgetQuilt();
+
+            % Initialise the quilt image
+            %obj.quiltimage = zeros(Quilt.sizepx,Quilt.sizepx,3,"uint8");
+
             if nargin == 0  % no figure handle given
                 [obj.fig, obj.ax, obj.figname] = holoquilt.surfshow(); % generate a 3D fig
             end
-            if isempty(obj.renderFig)
-               obj.renderFig = renderFigInit(obj);
+            if nargin == 1
+                if ishandle(varargin{1})
+                    obj.fig = varargin{1};
+                    obj.figname = strcat("Quilt-",num2str(obj.fig.Number));
+                    obj.ax = gca; 
+                end
             end
-            obj = renderViews(obj);
+
+            if isempty(Quilt.renderFig)
+               Quilt.renderFig = renderFigInit(obj, holoquilt.setgetQuilt());
+               holoquilt.setgetQuilt(Quilt); % add renderFig to Quilt, first run
+            else
+               renderFigInit(obj, holoquilt.setgetQuilt()); % prep the main fig
+            end
+            holoquilt.renderViews(obj.fig);
         end % constructor
 
 
-        function obj = renderViews(obj)
-        % Multiview rendering to make a quilt, starting with the leftmost view and
-        % orbit the camera across the scene, taking snapshots of the renderfig as
-        % we go. The snapshots are added to the quilt image matrix
-        % - callback when a mouse rotate is done
-
-            if obj.busyrendering == true % ensure only one render job at a time 
-                return
-            end
-
-            obj.busyrendering = true;
-            figure(obj.fig)
-            axs = gca;
-            h = rotate3d(obj.fig);
-            setAllowAxesRotate(h,axs,false); % disable rotation during renders
-            clf(obj.renderFig); 
-            obj.renderFig.Color = obj.fig.Color;
-            obj.renderFig.Colormap = obj.fig.Colormap;
-            copyobj(axs,obj.renderFig);
-            figure(obj.renderFig);
-            Quilt = obj.quilt;
-            dAz = Quilt.viewCone/Quilt.size; 
-            camorbit(-Quilt.viewCone*0.5-dAz, 0, 'camera'); % start at the leftmost view 
-            tic
-            for j = 1:Quilt.size
-                %figure(shared.renderFig);
-                Quilt.renderFig.Visible = "on";
-                camorbit(dAz, 0, 'camera'); % advance cam by one position
-                %shared.renderFig.Visible = "off";
-                im = frame2im(getframe(obj.renderFig));
-                [r, c] = find(Quilt.qq==j);
-                row = Quilt.rpos(r);
-                col = Quilt.cpos(c);
-                if obj.diagnostic
-                    im = insertText(im, [50*floor(j/20+1) 40*mod(j,15)], ... 
-                                num2str(j), "FontSize",30, "TextColor","yellow"); 
-                end
-                imsz = size(im);
-                Quilt.image(row:row+imsz(1)-1, col:col+imsz(2)-1, :) = im;
-            end
-            toc
-            obj.renderFig.Visible = "off";
-            if obj.displayPresent
-                np_quilt = py.numpy.array(Quilt.image); 
+        function showQuilt(src,evt)
+            if Quilt.displayPresent && ~Quilt.busyrendering
+                np_quilt = py.numpy.array(obj.quiltimage); 
                 py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
             end
-            obj.busyrendering = false; 
-            %h.Enable = 'on';
-            setAllowAxesRotate(h,axs,true); % enable rotation
-            % imwrite(Quilt.image,shared.fn,shared.ext);     % write to disk
-            % status = system(shared.cmd)                   % call python via cmd line
-
-        end % renderViews
+        end
 
 
-
-        function renderfig = renderFigInit(obj)
+        function renderfig = renderFigInit(obj, Quilt)
         % Prepare the main figure for 3D visualisation and create an auxillary
         % figure for the actual multi-view rendering
               
@@ -127,36 +97,40 @@ classdef holoquilt
             obj.fig.MenuBar = "none";
             %f.ToolBar = "auto";
             
-            %%f.WindowButtonUpFcn = "disp('figure callback')";
+            %obj.fig.WindowButtonUpFcn = "disp('figure callback')";
+            obj.fig.WindowButtonUpFcn = @(src,evt)holoquilt.WinBtnUpCb(src,evt);
             %f.WindowScrollWheelFcn = @(src,evt)scrollCallback(src,evt); %"disp('Scroll callback')";
             %f.WindowKeyPressFcn = @(src,evt)keypressedCallback(src,evt); %"disp('Key realease callback')";
-            obj.fig.Position(3:4) = [obj.quilt.imresX obj.quilt.imresY]*0.71; % set resolution of viewport
+            obj.fig.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.71; % set resolution of viewport
             
             h = rotate3d;
-            %h.ActionPostCallback = @(src,evt)renderViews(f,evt); % Callback for renderer
-        
-            % A second figure is used for the actual rendering. It is normally invisible
-            renderfig = figure;
-            renderfig.MenuBar = "none";
-            %renderFig.ToolBar = "none";
-            renderfig.Color = obj.fig.Color;
-            renderfig.Colormap = obj.fig.Colormap;
-            renderfig.Position(1:2) = obj.fig.Position(1:2) + [0 -obj.quilt.imresY];    
-            renderfig.Position(3:4) = [obj.quilt.imresX obj.quilt.imresY]*0.5; % set resolution of renderer
-            axis manual;
-            hold off;
-            
-            figure(obj.fig); % back to the main fig
+            h.ActionPostCallback = @(src,evt)holoquilt.rotateActionCb(src,evt); % Callback for renderer
+
+            % A second fig is used for the actual rendering. It is normally invisible
+            if isempty(Quilt.renderFig)
+                renderfig = figure(10000);  % put it out of the way
+                renderfig.MenuBar = "none";
+                %renderFig.ToolBar = "none";
+                renderfig.Color = obj.fig.Color;
+                renderfig.Colormap = obj.fig.Colormap;
+                renderfig.Position(1:2) = obj.fig.Position(1:2) + [0 -Quilt.imresY];    
+                renderfig.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.5; % set resolution of renderer
+                axis manual;
+                hold off;
+                
+                figure(obj.fig); % back to the main fig
+            else
+                renderfig = Quilt.renderFig;
+            end
         
         end % renderFigGen
 
 
-        function obj = init3Ddisplay(obj)
+        function [obj, Quilt] = init3Ddisplay(obj)
         % Initialise the 3D display via the python utility that returns info
         % from the HoloPlay driver. The info contains all of the parameters related
         % to the quilt and the display itself. If this display is not connected
         % then a default set of parameters is used.
-
 
             obj.utilityPresent = isfile(obj.pyscript);
             if not(obj.utilityPresent)
@@ -178,6 +152,7 @@ classdef holoquilt
             end
             obj.LKG_display = obj.defaultDisplay;
             Quilt = struct;
+            Quilt.displayPresent = false;
             % Interpret return from driver
             if status{1}==false
                 fprintf('No 3D display found, using default params for %s \n', obj.LKG_display);
@@ -199,12 +174,12 @@ classdef holoquilt
                     viewCone = struct(calibration.viewCone);
                     Quilt.viewCone = double(viewCone.value);
                     obj.LKG_display = string(params.hardwareVersion); 
-                    obj.displayPresent = true;
+                    Quilt.displayPresent = true;
                 end 
             end 
             
             % Default parameters if no display is present
-            if not (obj.displayPresent)
+            if not (Quilt.displayPresent)
                 switch obj.LKG_display      % Params for the various displays
                     case "portrait"
                         Quilt.rows = 6;
@@ -237,19 +212,74 @@ classdef holoquilt
             Quilt.rpos=1:Quilt.imresY:Quilt.sizepx;  % indexing into larger quilt image
             Quilt.cpos=1:Quilt.imresX:Quilt.sizepx;
 
-            % Initialise the quilt image
+            Quilt.busyrendering = false;  % don't interrupt a quilt being built
             Quilt.image = zeros(Quilt.sizepx,Quilt.sizepx,3,"uint8");
-
-            obj.quilt = Quilt; 
+            Quilt.renderFig = []; 
                     
         end % init3Ddisplay
-
-
 
     end % public methods
 
     %%
     methods (Static)
+
+        function renderViews(fig)
+        % Multiview rendering to make a quilt, starting with the leftmost view and
+        % orbit the camera across the scene, taking snapshots of the renderfig as
+        % we go. The snapshots are added to the quilt image matrix
+        % - callback when a mouse rotate is done
+
+            %Quilt = obj.quilt;
+            Quilt = holoquilt.setgetQuilt();
+            if Quilt.busyrendering == true % ensure only one render job at a time 
+                return
+            end
+
+            Quilt.busyrendering = true;
+            %figure(fig);
+            axs = gca;
+            h = rotate3d(fig);
+            setAllowAxesRotate(h,axs,false); % disable rotation during renders
+            clf(Quilt.renderFig); 
+            Quilt.renderFig.Color = fig.Color;
+            Quilt.renderFig.Colormap = fig.Colormap;
+            copyobj(axs,Quilt.renderFig);
+            figure(Quilt.renderFig);
+            dAz = Quilt.viewCone/Quilt.size; 
+            camorbit(-Quilt.viewCone*0.5-dAz, 0, 'camera'); % start at the leftmost view 
+            tic
+            diagnostics = holoquilt.setgetDiagnostics();
+            %quiltimage = zeros(Quilt.sizepx,Quilt.sizepx,3,"uint8");
+            Quilt.renderFig.Visible = "on"; % show the renderer
+            for j = 1:Quilt.size
+                %figure(shared.renderFig);
+                camorbit(dAz, 0, 'camera'); % advance cam by one position
+                %shared.renderFig.Visible = "off";
+                im = frame2im(getframe(Quilt.renderFig));
+                [r, c] = find(Quilt.qq==j);
+                row = Quilt.rpos(r);
+                col = Quilt.cpos(c);
+                if diagnostics
+                    im = insertText(im, [50*floor(j/20+1) 40*mod(j,15)], ... 
+                                num2str(j), "FontSize",30, "TextColor","yellow"); 
+                end
+                imsz = size(im);
+                Quilt.image(row:row+imsz(1)-1, col:col+imsz(2)-1, :) = im;
+            end
+            toc
+            Quilt.renderFig.Visible = "off";
+            if Quilt.displayPresent
+                np_quilt = py.numpy.array(Quilt.image); 
+                py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
+                holoquilt.setget_np_quiltimages(fig.Number,np_quilt);
+            end
+            Quilt.busyrendering = false; 
+            %h.Enable = 'on';
+            setAllowAxesRotate(h,axs,true); % enable rotation
+
+        end % renderViews
+
+
         function [fig, ax, figname] = surfshow(varargin)
         % Define different kinds of 3D images to show
             
@@ -336,6 +366,68 @@ classdef holoquilt
               
         end % surfshow
 
+
+        %% Static variables
+        function out = setgetQuilt(Quilt_in)
+        % The Quilt and its parameters are static, shared across all instances
+            persistent Quilt;
+            if nargin
+                Quilt = Quilt_in;
+            end
+            out = Quilt;
+        end
+
+        
+        function out = setgetDiagnostics(flag)
+            persistent diagnostics;
+            if isempty(diagnostics)
+                diagnostics = false;
+            end
+            if nargin
+                diagnostics = flag;
+            end
+            out = diagnostics;
+        end
+
+        
+        function out = setget_np_quiltimages(num,np_quiltimg)
+        % Manage a static py dict that holds rendered numpy quilt images
+
+            persistent np_quiltimages;
+            if isempty(np_quiltimages)
+                np_quiltimages = py.dict(pyargs());
+            end
+            if nargin == 2
+                update(np_quiltimages,py.dict(pyargs(num2str(num),np_quiltimg)));
+            end
+            out = np_quiltimages;         
+        end
+
+
+        %% Callbacks
+        function WinBtnUpCb(src,evt)
+        % Call back for a figure window selection - show the previous
+        % quilt immediately
+
+           Quilt = holoquilt.setgetQuilt();
+           np_quilts = holoquilt.setget_np_quiltimages();
+           np_quilt = np_quilts{num2str(src.Number)};
+           py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
+            
+        end
+
+
+        function rotateActionCb(src,evt)
+            holoquilt.renderViews(src);
+        end
+
+
+        function testCb(src,evt)
+            disp(src); 
+            disp(src.Number);
+            disp(evt);
+        end
+        
 
     end % static methods
 
