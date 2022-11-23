@@ -410,9 +410,11 @@ classdef holoquilt
         % quilt immediately
 
            Quilt = holoquilt.setgetQuilt();
-           np_quilts = holoquilt.setget_np_quiltimages();
-           np_quilt = np_quilts{num2str(src.Number)};
-           py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
+           if Quilt.displayPresent
+               np_quilts = holoquilt.setget_np_quiltimages();
+               np_quilt = np_quilts{num2str(src.Number)};
+               py.holoserverpy.mat_quilt(np_quilt,Quilt.cols,Quilt.rows,Quilt.aspect); 
+           end
             
         end
 
