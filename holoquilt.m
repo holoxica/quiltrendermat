@@ -101,11 +101,13 @@ classdef holoquilt
             obj.fig.WindowButtonUpFcn = @(src,evt)holoquilt.WinBtnUpCb(src,evt);
             %f.WindowScrollWheelFcn = @(src,evt)scrollCallback(src,evt); %"disp('Scroll callback')";
             %f.WindowKeyPressFcn = @(src,evt)keypressedCallback(src,evt); %"disp('Key realease callback')";
+            offset = (obj.fig.Number - 1) * 20;
+            obj.fig.Position(1:2) = obj.fig.Position(1:2) + [offset -offset];
             obj.fig.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.71; % set resolution of viewport
             
             h = rotate3d;
             h.ActionPostCallback = @(src,evt)holoquilt.rotateActionCb(src,evt); % Callback for renderer
-
+            scale = 1.0;
             % A second fig is used for the actual rendering. It is normally invisible
             if isempty(Quilt.renderFig)
                 renderfig = figure(10000);  % put it out of the way
@@ -114,7 +116,8 @@ classdef holoquilt
                 renderfig.Color = obj.fig.Color;
                 renderfig.Colormap = obj.fig.Colormap;
                 renderfig.Position(1:2) = obj.fig.Position(1:2) + [0 -Quilt.imresY];    
-                renderfig.Position(3:4) = [Quilt.imresX Quilt.imresY]*0.5; % set resolution of renderer
+                if ismac, scale=0.5; end    % mac renderer is somehow 2x too big, win is fine
+                renderfig.Position(3:4) = [Quilt.imresX Quilt.imresY]*scale; % set resolution of renderer
                 axis manual;
                 hold off;
                 
@@ -368,6 +371,7 @@ classdef holoquilt
 
 
         %% Static variables
+
         function out = setgetQuilt(Quilt_in)
         % The Quilt and its parameters are static, shared across all instances
             persistent Quilt;
@@ -391,7 +395,7 @@ classdef holoquilt
 
         
         function out = setget_np_quiltimages(num,np_quiltimg)
-        % Manage a static py dict that holds rendered numpy quilt images
+        % Manage a static python dict that holds rendered numpy quilt images
 
             persistent np_quiltimages;
             if isempty(np_quiltimages)
